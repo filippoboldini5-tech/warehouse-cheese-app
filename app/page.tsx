@@ -351,9 +351,13 @@ function InventoryCard({ title, subtitle, inventory }) {
   );
 }
 
-function ExportPdfPanel({ title, lots, includeWarehouse = false, showOrderedExport = false }) {
+function ExportPdfPanel({ title, lots, includeWarehouse = false, showOrderedExport = false, historicalWarehouseId = null }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const minDate = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const [filters, setFilters] = useState({ ...EMPTY_FILTERS });
   const [message, setMessage] = useState("");
+  const [historicalDate, setHistoricalDate] = useState(today);
+  const [isHistoricalLoading, setIsHistoricalLoading] = useState(false);
   const filteredLots = useMemo(() => filterLots(lots, filters), [lots, filters]);
   const filteredInventory = useMemo(() => calculateInventory(filteredLots), [filteredLots]);
 
@@ -378,19 +382,76 @@ function ExportPdfPanel({ title, lots, includeWarehouse = false, showOrderedExpo
     }
   }
 
+  async function handleHistoricalExport() {
+    if (!historicalDate) {
+      setMessage("Seleziona una data inventario valida.");
+      return;
+    }
+
+    if (historicalDate < minDate || historicalDate > today) {
+      setMessage(`La data deve essere compresa tra ${minDate} e ${today}.`);
+      return;
+    }
+
+    setIsHistoricalLoading(true);
+    setMessage("");
+
+    const { data, error } = await supabase.rpc("get_inventory_at_date", {
+      p_target_date: historicalDate,
+    });
+
+    setIsHistoricalLoading(false);
+
+    if (error) {
+      setMessage(`Errore inventario storico: ${error.message}`);
+      return;
+    }
+
+    let historicalLots = (data || []).map(mapLot);
+    if (historicalWarehouseId) {
+      historicalLots = historicalLots.filter((lot) => lot.warehouseId === historicalWarehouseId);
+    }
+
+    const historicalFilteredLots = filterLots(historicalLots, filters);
+    const historicalTitle = `${title} al ${historicalDate}`;
+
+    try {
+      downloadPdf(historicalTitle, historicalFilteredLots, includeWarehouse);
+      setMessage(`PDF storico richiesto al browser: ${safeExportName(historicalTitle)}.pdf`);
+    } catch (pdfError) {
+      console.error(pdfError);
+      setMessage("Errore durante la generazione del PDF storico. Controlla la console del browser.");
+    }
+  }
+
   return (
     <Card className="rounded-2xl shadow-sm">
       <CardContent className="p-4">
         <div className="mb-3 flex items-center gap-2"><FileDown className="h-5 w-5" /><h2 className="text-xl font-semibold">Esporta PDF</h2></div>
-        <p className="mb-4 text-sm text-black">Puoi esportare tutto oppure filtrare per tipologia, matricola, mese e anno.</p>
+        <p className="mb-4 text-sm text-black">Puoi esportare l'inventario attuale oppure ricostruire l'inventario storico a una data entro l'ultimo anno.</p>
         <div className="grid gap-2 md:grid-cols-4">
           <select className="rounded-xl border p-2" value={filters.type} onChange={(e) => setFilters({ ...filters, type: e.target.value })}><option value="">Tutte le tipologie</option>{TYPES.map((type) => <option key={type}>{type}</option>)}</select>
           <input className="rounded-xl border p-2" placeholder="Matricola" value={filters.matricola} onChange={(e) => setFilters({ ...filters, matricola: e.target.value })} />
           <select className="rounded-xl border p-2" value={filters.month} onChange={(e) => setFilters({ ...filters, month: e.target.value })}><option value="">Tutti i mesi</option>{MONTHS.map((month) => <option key={month}>{month}</option>)}</select>
           <input className="rounded-xl border p-2" placeholder="Anno" value={filters.year} onChange={(e) => setFilters({ ...filters, year: e.target.value })} />
         </div>
-        <div className="mt-4 flex flex-wrap gap-2"><Button variant="outline" type="button" onClick={handleExport}>Scarica PDF raggruppato</Button>{showOrderedExport && <Button variant="outline" type="button" onClick={handleOrderedExport}>Scarica PDF ordinato</Button>}<Button variant="ghost" type="button" onClick={() => setFilters({ ...EMPTY_FILTERS })}>Pulisci filtri</Button></div>
-        <div className="mt-3 text-sm text-black">Righe da esportare: <strong>{filteredLots.length}</strong> · forme da esportare: <strong>{filteredInventory.totalForms.toLocaleString("it-IT")}</strong></div>
+        <div className="mt-4 grid gap-3 rounded-2xl border bg-slate-50 p-3 md:grid-cols-[1fr_auto] md:items-end">
+          <div>
+            <label className="mb-1 block text-sm font-semibold text-black">Data inventario storico</label>
+            <input
+              className="w-full rounded-xl border bg-white p-2 text-black"
+              type="date"
+              min={minDate}
+              max={today}
+              value={historicalDate}
+              onChange={(e) => setHistoricalDate(e.target.value)}
+            />
+            <div className="mt-1 text-xs text-black">Massimo un anno indietro. L'inventario storico viene ricostruito dai movimenti registrati.</div>
+          </div>
+          <Button variant="outline" type="button" disabled={isHistoricalLoading} onClick={handleHistoricalExport}>{isHistoricalLoading ? "Genero..." : "Scarica PDF alla data"}</Button>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2"><Button variant="outline" type="button" onClick={handleExport}>Scarica PDF attuale raggruppato</Button>{showOrderedExport && <Button variant="outline" type="button" onClick={handleOrderedExport}>Scarica PDF attuale ordinato</Button>}<Button variant="ghost" type="button" onClick={() => setFilters({ ...EMPTY_FILTERS })}>Pulisci filtri</Button></div>
+        <div className="mt-3 text-sm text-black">Righe attuali da esportare: <strong>{filteredLots.length}</strong> · forme attuali da esportare: <strong>{filteredInventory.totalForms.toLocaleString("it-IT")}</strong></div>
         {message && <div className="mt-3 rounded-xl bg-blue-50 p-3 text-sm text-blue-900">{message}</div>}
       </CardContent>
     </Card>
@@ -547,7 +608,7 @@ function WarehouseView({ warehouse, lots, unloads, onBackHome, refreshData }) {
         <MovementPanel form={form} setForm={setForm} mode={mode} setMode={setMode} selectedStats={selectedStats} message={message} handleMovement={handleMovement} isSaving={isSaving} />
       </div>
       <InventoryCard title="Inventario" subtitle="Giacenza aggiornata in tempo reale in base a Supabase." inventory={inventory} />
-      <ExportPdfPanel title={`Inventario ${warehouse.name}`} lots={lots} includeWarehouse={false} showOrderedExport={true} />
+      <ExportPdfPanel title={`Inventario ${warehouse.name}`} lots={lots} includeWarehouse={false} showOrderedExport={true} historicalWarehouseId={warehouse.id} />
       <div className="grid gap-4 md:grid-cols-2">
         <SelectedAreaCard selectedLots={selectedLots} />
         <SearchPanel filters={filters} setFilters={setFilters} filteredLots={filteredLots} />
