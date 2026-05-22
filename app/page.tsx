@@ -571,6 +571,11 @@ function HomePage({ setSelectedWarehouseId, lotsByWarehouse, warehouses }) {
 }
 
 export default function MagazziniFormaggiApp() {
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginMessage, setLoginMessage] = useState("");
   const [selectedWarehouseId, setSelectedWarehouseId] = useState(null);
   const [warehouses, setWarehouses] = useState({});
   const [lotsByWarehouse, setLotsByWarehouse] = useState({});
@@ -655,13 +660,106 @@ export default function MagazziniFormaggiApp() {
   }
 
   useEffect(() => {
-    refreshData();
+    let active = true;
+
+    async function loadSession() {
+      const { data, error } = await supabase.auth.getSession();
+      if (!active) return;
+      if (error) setLoginMessage(error.message);
+      setSession(data?.session || null);
+      setAuthLoading(false);
+    }
+
+    loadSession();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setAuthLoading(false);
+      if (!nextSession) {
+        setSelectedWarehouseId(null);
+        setWarehouses({});
+        setLotsByWarehouse({});
+        setUnloadsByWarehouse({});
+      }
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
   }, []);
+
+  useEffect(() => {
+    if (session) refreshData();
+  }, [session]);
+
+  async function login() {
+    setLoginMessage("");
+    const { error } = await supabase.auth.signInWithPassword({
+      email: loginEmail.trim(),
+      password: loginPassword,
+    });
+
+    if (error) {
+      setLoginMessage(error.message);
+      return;
+    }
+
+    setLoginPassword("");
+  }
+
+  async function logout() {
+    await supabase.auth.signOut();
+  }
 
   const selectedWarehouse = selectedWarehouseId ? warehouses[selectedWarehouseId] : null;
 
+  if (authLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-white p-4 text-black">
+        <div className="rounded-2xl border bg-white p-6 shadow-sm">Caricamento accesso...</div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-white p-4 text-black">
+        <div className="w-full max-w-md rounded-2xl border bg-white p-8 shadow-sm">
+          <h1 className="mb-2 text-2xl font-bold text-black">Login Magazzino Formaggi</h1>
+          <p className="mb-6 text-sm text-black">Accedi per visualizzare e modificare i magazzini.</p>
+          <input
+            className="mb-3 w-full rounded-xl border p-3 text-black"
+            type="email"
+            placeholder="Email"
+            value={loginEmail}
+            onChange={(e) => setLoginEmail(e.target.value)}
+          />
+          <input
+            className="mb-4 w-full rounded-xl border p-3 text-black"
+            type="password"
+            placeholder="Password"
+            value={loginPassword}
+            onChange={(e) => setLoginPassword(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") login();
+            }}
+          />
+          <Button className="w-full" onClick={login}>Accedi</Button>
+          {loginMessage && <div className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-900">{loginMessage}</div>}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+      <div className="mx-auto mb-4 flex max-w-7xl items-center justify-between rounded-2xl border bg-white p-3 shadow-sm">
+        <div className="text-sm text-black">Accesso: <strong>{session.user?.email}</strong></div>
+        <Button variant="outline" onClick={logout}>Logout</Button>
+      </div>
       {errorMessage && <div className="mx-auto mb-4 max-w-6xl rounded-xl bg-red-50 p-4 text-sm text-red-900">{errorMessage}</div>}
       {isLoading ? (
         <div className="mx-auto max-w-6xl rounded-2xl bg-white p-6 text-black shadow-sm">Caricamento dati da Supabase...</div>
